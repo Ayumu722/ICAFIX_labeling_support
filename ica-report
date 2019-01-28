@@ -1,0 +1,327 @@
+#!/usr/bin/env python
+"""
+Make ica fix qc pages for all specified files and creates and index html page of summary data.
+
+Usage:
+  ica-report [options] <input.feat>...
+
+Arguments:
+  <input.feat>  Top directory for the output file structure
+
+Options:
+  --html-out FILE          Name [default: qc_icafix.html] (fullpath) to index html file.
+  --labelfilename FILE     Name [default: fix4melview_Standard_thr20.txt] of file that contains labels.
+  --csvreport FILE         Name of csv output of summary stats.
+  --copy-qcdir PATH        Copy out all the qc files and the melodic report to the specified path
+  -v,--verbose             Verbose logging
+  --debug                  Debug logging in Erin's very verbose style
+  -n,--dry-run             Dry run
+  --help                   Print help
+
+Written by Ayumu Yamsahita, January 28 2019
+"""
+from docopt import docopt
+import os
+import subprocess
+import glob
+import sys
+import pandas as pd
+import numpy as np
+
+arguments       = docopt(__doc__)
+featdirs        = arguments['<input.feat>']
+htmlindexfile   = arguments['--html-out']
+icalabels       = arguments['--labelfilename']
+csvfilename     = arguments['--csvreport']
+copyqcdir       = arguments['--copy-qcdir']
+VERBOSE         = arguments['--verbose']
+DEBUG           = arguments['--debug']
+DRYRUN          = arguments['--dry-run']
+if DEBUG: print arguments
+
+def docmd(cmdlist):
+    "sends a command (inputed as a list) to the shell"
+    if DEBUG: print ' '.join(cmdlist)
+    if not DRYRUN: subprocess.call(cmdlist)
+
+def write_html_section(featdir, htmlhandle, IClist,SectionClass):
+    SectionTitle = "{} Components".format(SectionClass)
+    if SectionClass == "Signal":
+        htmlhandle.write('<h2 style="text-align:start;\n'
+        'color:#005FFF;\n'
+        'background: #eaf3ff;\n'
+        'border-bottom: solid 3px #516ab6;\n'
+        'padding: 0.5em;\n'
+        'border-radius: 0.5em;\n'
+            'padding-left: 50px;">'+SectionTitle+'</h2>')
+
+    if SectionClass == "Noise":
+       htmlhandle.write('<h2 style="text-align:start;\n'
+       'color:#FF3333;\n'
+       'background: #FFCCFF;\n'
+       'border-bottom: solid 3px #FF3333;\n'
+       'padding: 0.5em;\n'
+       'border-radius: 0.5em;\n'
+       'padding-left: 50px;">'+SectionTitle+'</h2>')
+
+    for IC in IClist:
+        ## determine absolute and relative paths to the web page ica report data
+        pic1 = os.path.join(featdir,'filtered_func_data.ica','report','ICA'+ str(IC) +'.gif')
+        icreport = os.path.join(featdir,'filtered_func_data.ica','report','IC_'+ str(IC) +'.html')
+        pic1relpath = os.path.relpath(pic1,os.path.dirname(htmlhandle.name))
+        icreppath = os.path.relpath(icreport,os.path.dirname(htmlhandle.name))
+        ## write it to the html
+        htmlhandle.write('<p class="{} resizeimage">\n'.format(SectionClass))
+        htmlhandle.write('<font size=5>IC_{}</font>\n'.format(IC))
+
+        htmlhandle.write('<input type="radio" name="IC{}" value="Signal"'.format(IC))
+        if SectionClass == "Signal": htmlhandle.write(' checked="checked"')
+        htmlhandle.write(' id="IC{}-signal" style="display: none;">\n'.format(IC))
+        htmlhandle.write('<label for="IC{}-signal" class="IC_signal">Signal</label>\n'.format(IC))
+
+        htmlhandle.write('<input type="radio" name="IC{}" value="Noise"'.format(IC))
+        if SectionClass == "Noise": htmlhandle.write(' checked="checked"')
+        htmlhandle.write(' id="IC{}-noise" style="display: none;">\n'.format(IC))
+        htmlhandle.write('<label for="IC{}-noise" class="IC_noise">Noise</label>\n'.format(IC))
+
+        htmlhandle.write('<img src="{}"><br>\n'.format(pic1relpath))
+        htmlhandle.write('</p>\n')
+
+def write_classify_file(htmlhandle, IClist,SectionClass):
+    if SectionClass =="Signal":
+        htmlhandle.write('var handlabels_S2N = "";\n')
+        for IC in IClist:
+            htmlhandle.write('  if ($("input[name=IC' + str(IC) +']:checked").val() == "Noise") ')
+            htmlhandle.write('{handlabels_S2N += "'+ str(IC) +' ";}\n')
+        htmlhandle.write('  handlabels_S2N = handlabels_S2N.substring(0,handlabels_S2N.length - 1);\n')
+        htmlhandle.write('  $("#output_noise").text(handlabels_S2N);\n')
+    if SectionClass =="Noise":
+        htmlhandle.write('var handlabels_N2S = "";\n')
+        for IC in IClist:
+            htmlhandle.write('  if ($("input[name=IC' + str(IC) +']:checked").val() == "Signal") ')
+            htmlhandle.write('{handlabels_N2S += "'+ str(IC) +' ";}\n')
+        htmlhandle.write('  handlabels_N2S = handlabels_N2S.substring(0,handlabels_N2S.length - 1);\n')
+        htmlhandle.write('  $("#output_signal").text(handlabels_N2S);\n')
+
+def get_SignalandNoise(inputdir, inputlabelfile, numICs) :
+    labelpath = os.path.join(inputdir,inputlabelfile)
+    if os.path.isfile(labelpath):
+        a=open(labelpath,'rb')
+        lines = a.readlines()
+        if lines:
+            first_line = lines[:1]
+            last_line = lines[-1]
+
+        bad_ica = last_line.split(',')
+        for i in range(len(bad_ica)):
+            bad_ica[i] = bad_ica[i].replace('[','')
+            bad_ica[i] = bad_ica[i].replace(']','')
+            bad_ica[i] = bad_ica[i].replace(' ','')
+            bad_ica[i] = bad_ica[i].replace('\n','')
+
+        ## if bad icas are empty, set the empty list, if not set to mat to int
+        if bad_ica == ['']:
+            bad_ica = []
+        else:
+            bad_ica = map(int,bad_ica)
+            if max(bad_ica) > numICs:
+                print("We have a problem, more labels in {} than ICs".format(inputlabelfile))
+                print("Number of ICs: {}".format(numICs))
+                print("Labeled Bad ICs {}".format(bad_ica))
+
+    else:
+        sys.exit("IC labels file {} not found".format(labelpath))
+
+
+    good_ica = list(set(range(1,numICs+1)) - set(bad_ica))
+    return(good_ica,bad_ica)
+
+def write_featdir_html(featdir, htmlpath, signal, noise, htmltitle):
+
+    handlablefile = os.path.join(featdir, "hand_labels_noise.txt")
+    handlabelrelpath = os.path.relpath(handlablefile,os.path.dirname(htmlpath))
+    htmlpage = open(htmlpath,'w')
+    htmlpage.write('<HTML><TITLE>'+htmltitle+'</TITLE>')
+    htmlpage.write('<head>\n')
+    htmlpage.write('<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>')
+    htmlpage.write('<style>\n')
+    htmlpage.write('body { background-color:#333333; '
+                    'font-family: futura,sans-serif;color:white;\n'
+                    'text-align: center;}\n')
+    htmlpage.write('p.resizeimage img {width: 80%;}\n')
+    htmlpage.write('p.Signal {background-color:#009999;}\n')
+    htmlpage.write('p.Noise {background-color:#CE5A5A;}\n')
+    htmlpage.write('img {width:800; display: block;margin-left: auto;margin-right: auto }\n')
+    # htmlpage.write('h2 {color:white; }\n')
+    htmlpage.write('.IC_signal{\n'
+    'display: inline-block;\n'
+    'padding: 0.5em 1em;\n'
+    'text-decoration: none;\n'
+    'background: #005FFF;\n'
+    'color: #FFF;\n'
+    'border-bottom: solid 4px #627295;\n'
+    'border-radius: 3px;\n'
+    '}\n')
+    htmlpage.write('.IC_noise{\n'
+    'display: inline-block;\n'
+    'padding: 0.5em 1em;\n'
+    'text-decoration: none;\n'
+    'background: #CC0000;\n'
+    'color: #FFF;\n'
+    'border-bottom: solid 4px #627295;\n'
+    'border-radius: 3px;\n'
+    '}\n')
+    htmlpage.write('input:checked + label {background: black;}\n')
+    htmlpage.write('</style></head>\n')
+    htmlpage.write('<BODY>\n')
+    htmlpage.write('<form action="{}" method="post" id="main">\n'.format(handlabelrelpath))
+    htmlpage.write('<h1>Components for '+ featdir +'</h1>')
+
+    ## Signal for both
+    write_html_section(featdir, htmlpage, signal,"Signal")
+
+    ## add a break
+    htmlpage.write('<br>\n')
+
+    ## Signal for both
+    write_html_section(featdir, htmlpage, noise,"Noise")
+
+    ## finish the file
+    htmlpage.write('</form>\n')
+    htmlpage.write('<br><h3 style="font-size:150%;">Download ReclassifyAsNoise.txt and ReclassifyAsSignal:</h3>\n')
+    htmlpage.write('<html lang="ja">\n')
+    htmlpage.write('<head><meta charset="utf-8"><title>Download Sample</title></head>\n')
+    htmlpage.write('<body>\n')
+
+    htmlpage.write('<script type="text/javascript">\n')
+    htmlpage.write('function handleDownload() {\n')
+    write_classify_file(htmlpage,signal,"Signal")
+    write_classify_file(htmlpage,noise,"Noise")
+
+    htmlpage.write('var blob = new Blob([ handlabels_S2N ], { "type" : "text/plain" });\n'
+                    'if (window.navigator.msSaveBlob) {\n'
+                    'window.navigator.msSaveBlob(blob, "ReclassifyAsNoise.txt");\n'
+                    'window.navigator.msSaveOrOpenBlob(blob, "ReclassifyAsNoise.txt");}\n'
+                    'else {document.getElementById("download_noise").href = window.URL.createObjectURL(blob);}\n')
+    htmlpage.write('var blob = new Blob([ handlabels_N2S ], { "type" : "text/plain" });\n'
+                    'if (window.navigator.msSaveBlob) {\n'
+                    'window.navigator.msSaveBlob(blob, "ReclassifyAsSignal.txt");\n'
+                    'window.navigator.msSaveOrOpenBlob(blob, "ReclassifyAsSignal.txt");}\n'
+                    'else {document.getElementById("download_signal").href = window.URL.createObjectURL(blob);}\n')
+    htmlpage.write('}</script>\n')
+    htmlpage.write('<a style="color:#ff9900;font-size:150%;" id="download_noise" href="#" download="ReclassifyAsNoise.txt" onclick="handleDownload()">Download ReclassifyAsNoise.txt</a>\n'
+                    '<br>Signal to Noise = "<span id="output_noise"></span>"<br>\n')
+    htmlpage.write('<a style="color:#ff9900;font-size:150%;" id="download_signal" href="#" download="ReclassifyAsSignal.txt" onclick="handleDownload()">Download ReclassifyAsSignal.txt</a>\n'
+                    '<br>Noise to Signal = "<span id="output_signal"></span>"<br>\n')
+    htmlpage.write('</body>\n</html>\n')
+    htmlpage.write('</BODY>\n</HTML>\n')
+    htmlpage.close() # you can omit in most cases as the destructor will call it
+
+
+## Start the index html file
+htmlindex = open(htmlindexfile,'w')
+htmlindex.write('<HTML><TITLE> ICA FIX qc index </TITLE>\n'
+                '<head>\n<style>\n'
+                'body { background-color:#333333; '
+                'font-family: futura,sans-serif;'
+                'color:white;text-align: center;}\n'
+                'a:link {color:#99CCFF;}\n'
+                'a:visited  {color: #AC58FA;}\n'
+                'table { margin: 25px auto; '
+                '        border-collapse: collapse;'
+                '        text-align: left;'
+                '        width: 98%; '
+                '        border: 1px solid grey;'
+                '        border-bottom: 2px solid #00cccc;} \n'
+                'th {background: #00cccc;\n'
+                'color: #fff;'
+                'text-transform: uppercase;};'
+                'td {border-top: thin solid;'
+                '    border-bottom: thin solid;}\n'
+                '</style></head>\n')
+
+## naming convention for individual html files from labelname
+labelbasename = os.path.splitext(icalabels)[0]
+htmltitle="{} ICA labels".format(labelbasename)
+
+## check that the csvreport exists
+if not csvfilename:
+    csvfilename = "ica_fix_report_{}.csv".format(labelbasename)
+
+## load the pandas dataframe
+csvreport = pd.DataFrame({ 'featdir' : pd.Categorical(featdirs),
+                           'labelfile' : labelbasename,
+                           'PercentExcluded' : np.empty([len(featdirs)], dtype=int),
+                           'NumSignal' : np.empty([len(featdirs)], dtype=int),
+                           'numICs' : np.empty([len(featdirs)], dtype=int)})
+#csvreport = loadreportcsv(csvfilename,featdirs)
+#csvreport.labelfile = icalabels
+
+## add the title
+htmlindex.write('<h1>ICA FIX qc index</h1>')
+htmlindex.write('<h2>Labels: {}</h2>'.format(labelbasename))
+
+## add the table header
+htmlindex.write('<table>'
+                '<tr><th>Path</th>'
+                '<th>Percent Excluded</th>'
+                '<th>Number Signal ICs</th>'
+                '<th>Total ICs</th></tr>')
+
+for featdir in featdirs:
+    ## get the number of ICA components from the report length
+    ICpngs = glob.glob(os.path.join(featdir,'filtered_func_data.ica','report','IC_*_thresh.png'))
+    numICs = len(ICpngs)
+
+    ## use function to get good and bad
+    signalICs, noiseICs = get_SignalandNoise(featdir, icalabels, numICs)
+
+    ## write the featdir's html file
+    featdirhtml = os.path.join(featdir,"{}_labels_report.html".format(labelbasename))
+    write_featdir_html(featdir, featdirhtml, signalICs, noiseICs, "{} ICA labels".format(labelbasename))
+
+    ## print relative link to index
+    featdir_relpath = os.path.relpath(featdirhtml,os.path.dirname(htmlindex.name))
+    featdir_relname = os.path.dirname(featdir_relpath)
+
+    htmlindex.write('<tr>') ## table new row
+    htmlindex.write('<td>') ## first data cell
+    htmlindex.write('<a href="{}">{}</a>'.format(featdir_relpath,featdir_relname))
+    htmlindex.write('</td>') ## end of cell
+
+    ## print basic stats - % excluded, total IC's number kept, total ICs
+    PercentExcluded = round(float(len(noiseICs))/float(numICs)*100)
+    NumSignal = len(signalICs)
+    htmlindex.write("<td>{}</td><td>{}</td><td>{}</td>".format(PercentExcluded,NumSignal,numICs))
+    htmlindex.write('</tr>')
+
+    ## write this info to csvreport
+    idx = csvreport[csvreport.featdir == featdir].index[0]
+    csvreport.loc[idx,'PercentExcluded'] = PercentExcluded
+    csvreport.loc[idx,'NumSignal'] = NumSignal
+    csvreport.loc[idx,'numICs'] = numICs
+
+
+## finish the file
+htmlindex.write('</table>\n')
+htmlindex.write('</BODY></HTML>\n')
+htmlindex.close() # you can omit in most cases as the destructor will call it
+
+## write the results out to a file
+csvreport.to_csv(csvfilename, sep=',', index = False)
+
+## if copydir option is given - copy all of this into a qcdir
+if copyqcdir:
+    docmd(['mkdir','-p',copyqcdir])
+    for featdir in featdirs:
+        # docmd(['mkdir','-p',os.path.join(copyqcdir,featdir,'filtered_func_data.ica')])
+        docmd(['mkdir','-p',os.path.join(copyqcdir,'filtered_func_data.ica')])
+        docmd(['cp',
+            os.path.join(featdir,"{}_labels_report.html".format(labelbasename)),
+            os.path.join(copyqcdir,"{}_labels_report.html".format(labelbasename))])
+        docmd(['cp',
+            os.path.join(featdir,icalabels),
+            os.path.join(copyqcdir,icalabels)])
+        docmd(['cp',
+            os.path.join(featdir,'filtered_func_data.ica','report','*.gif'),
+            os.path.join(copyqcdir,'filtered_func_data.ica','report')])
