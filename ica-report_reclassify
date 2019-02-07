@@ -1,0 +1,227 @@
+#!/usr/bin/env python
+"""
+View and modify TrainFIX_NonMatching.txt and index html page of summary data.
+
+Usage:
+  ica-report_reclassify [options] <NonMatching.txt>...
+
+Arguments:
+  <NonMatching.txt>  fullpath of TrainFIX_NonMatching.txt which the output file of hcppipe_trainfix
+
+Options:
+  -v,--verbose             Verbose logging
+  --debug                  Debug logging in Erin's very verbose style
+  -n,--dry-run             Dry run
+  --help                   Print help
+
+Written by Ayumu Yamsahita, February 7 2019
+"""
+from docopt import docopt
+import os
+import subprocess
+import glob
+import sys
+import pandas as pd
+import numpy as np
+
+arguments       = docopt(__doc__)
+nonmatchtxts     = arguments['<NonMatching.txt>']
+VERBOSE         = arguments['--verbose']
+DEBUG           = arguments['--debug']
+DRYRUN          = arguments['--dry-run']
+if DEBUG: print arguments
+
+def write_html_section(featdir, htmlhandle, IClist, SectionClass,sub_site_id):
+    SectionTitle = "{} Components".format(SectionClass)
+    if SectionClass == "Signal":
+        htmlhandle.write('<h2 style="text-align:start;\n'
+        'color:#005FFF;\n'
+        'background: #eaf3ff;\n'
+        'border-bottom: solid 3px #516ab6;\n'
+        'padding: 0.5em;\n'
+        'border-radius: 0.5em;\n'
+            'padding-left: 50px;">'+SectionTitle+'</h2>')
+
+    if SectionClass == "Noise":
+       htmlhandle.write('<h2 style="text-align:start;\n'
+       'color:#FF3333;\n'
+       'background: #FFCCFF;\n'
+       'border-bottom: solid 3px #FF3333;\n'
+       'padding: 0.5em;\n'
+       'border-radius: 0.5em;\n'
+       'padding-left: 50px;">'+SectionTitle+'</h2>')
+
+    for IC in IClist:
+        ## determine absolute and relative paths to the web page ica report data
+        pic1 = os.path.join(featdir,'filtered_func_data.ica','report','ICA'+ str(IC) +'.gif')
+        pic1relpath = os.path.relpath(pic1,os.path.dirname(htmlhandle.name))
+        ## write it to the html
+        htmlhandle.write('<p class="{} resizeimage">\n'.format(SectionClass))
+        htmlhandle.write('<font size=5>IC_{0}_{1}</font>\n'.format(IC,sub_site_id))
+
+        htmlhandle.write('<input type="radio" name="IC{0}_{1}" value="Signal"'.format(IC,sub_site_id))
+        if SectionClass == "Signal": htmlhandle.write(' checked="checked"')
+        htmlhandle.write(' id="IC{0}_{1}-signal" style="display: none;">\n'.format(IC,sub_site_id))
+        htmlhandle.write('<label for="IC{0}_{1}-signal" class="IC_signal">Signal</label>\n'.format(IC,sub_site_id))
+
+        htmlhandle.write('<input type="radio" name="IC{0}_{1}" value="Noise"'.format(IC,sub_site_id))
+        if SectionClass == "Noise": htmlhandle.write(' checked="checked"')
+        htmlhandle.write(' id="IC{0}_{1}-noise" style="display: none;">\n'.format(IC,sub_site_id))
+        htmlhandle.write('<label for="IC{0}_{1}-noise" class="IC_noise">Noise</label>\n'.format(IC,sub_site_id))
+
+        htmlhandle.write('<img src="{}"><br>\n'.format(pic1relpath))
+        htmlhandle.write('</p>\n')
+
+def get_SignalandNoise(inputdir, nonmatchICs) :
+    Labelpath = inputdir + "/Label.txt"
+    a=open(Labelpath,'r')
+    label_line=a.readlines()
+    Signals=[]
+    Noises=[]
+    t=0
+    for line_tmp in label_line[1:]:
+        t = t + 1
+        line=line_tmp.strip()
+        if line[-1]=="S":          
+            Signals.append(str(t))
+        else:
+            Noises.append(str(t))
+    nonmatchICs_set = set(nonmatchICs)
+    Noise_set = set(Noises)
+    Signal_set = set(Signals)
+    bad_ica = set(list(nonmatchICs_set & Noise_set))
+    good_ica = set(list(nonmatchICs_set & Signal_set))
+    return(good_ica,bad_ica)
+
+def write_featdir_html(featdir,htmlpath,nonmatchICs,sub_site_id):
+    htmlpage.write('<h1>Components for '+ featdir +'</h1>')
+    signalICs, noiseICs = get_SignalandNoise(featdir, nonmatchICs)
+    ## Signal for both
+    write_html_section(featdir, htmlpath, signalICs,"Signal",sub_site_id)
+    ## add a break
+    htmlpage.write('<br>\n')
+    ## Signal for both
+    write_html_section(featdir, htmlpath, noiseICs,"Noise",sub_site_id)
+    ## write classify file
+
+def write_classify_file(htmlhandle, IClist, SectionClass,sub_site_id):
+    if SectionClass =="Signal":
+        for IC in IClist:
+            htmlhandle.write('  if ($("input[name=IC{0}_{1}]:checked").val() == "Noise") '.format(IC,sub_site_id))
+            htmlhandle.write('{handlabels += "' + str(IC) +' N\\n";}\n')
+            htmlhandle.write('  else {handlabels += "' + str(IC) +' S\\n";}\n')
+    if SectionClass =="Noise":
+        for IC in IClist:
+            htmlhandle.write('  if ($("input[name=IC{0}_{1}]:checked").val() == "Signal") '.format(IC,sub_site_id))
+            htmlhandle.write('{handlabels += "' + str(IC) +' S\\n";}\n')
+            htmlhandle.write('  else {handlabels += "' + str(IC) +' N\\n";}\n')
+
+## Start the index html file
+for nonmatchtxt in nonmatchtxts:
+    outdir     = os.path.dirname(nonmatchtxt)
+    txtname,ext = os.path.splitext(os.path.basename(nonmatchtxt))
+    html = os.path.join(outdir,"{}_labels_report.html".format(txtname))
+    htmlpage = open(html,'w')
+    htmlpage.write('<HTML><TITLE>'+txtname+'</TITLE>')
+    htmlpage.write('<head>\n')
+    htmlpage.write('<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>')
+    htmlpage.write('<style>\n')
+    htmlpage.write('body { background-color:#333333; '
+                    'font-family: futura,sans-serif;color:white;\n'
+                    'text-align: center;}\n')
+    htmlpage.write('p.resizeimage img {width: 80%;}\n')
+    htmlpage.write('p.Signal {background-color:#009999;}\n')
+    htmlpage.write('p.Noise {background-color:#CE5A5A;}\n')
+    htmlpage.write('img {width:800; display: block;margin-left: auto;margin-right: auto }\n')
+    # htmlpage.write('h2 {color:white; }\n')
+    htmlpage.write('.IC_signal{\n'
+    'display: inline-block;\n'
+    'padding: 0.5em 1em;\n'
+    'text-decoration: none;\n'
+    'background: #005FFF;\n'
+    'color: #FFF;\n'
+    'border-bottom: solid 4px #627295;\n'
+    'border-radius: 3px;\n'
+    '}\n')
+    htmlpage.write('.IC_noise{\n'
+    'display: inline-block;\n'
+    'padding: 0.5em 1em;\n'
+    'text-decoration: none;\n'
+    'background: #CC0000;\n'
+    'color: #FFF;\n'
+    'border-bottom: solid 4px #627295;\n'
+    'border-radius: 3px;\n'
+    '}\n')
+    htmlpage.write('input:checked + label {background: black;}\n')
+    htmlpage.write('</style></head>\n')
+    htmlpage.write('<BODY>\n')
+    htmlpage.write('<h1>Components for '+ txtname +'</h1>')
+
+    labelpath = os.path.join(outdir,nonmatchtxt)
+    sub_site_id = 0
+    if os.path.isfile(labelpath):
+        a=open(labelpath,'r')
+        lines = a.readlines()
+        fol_name=os.path.basename(lines[0])
+        featdir= os.path.join(lines[0].strip(),fol_name.strip()) + '_hp2000.ica'
+        nonmatchICs=[]
+        for line in lines[1:]:
+            if len(line)>10:
+                write_featdir_html(featdir, htmlpage, nonmatchICs,sub_site_id)
+                sub_site_id = sub_site_id + 1
+                fol_name=os.path.basename(line)
+                featdir= os.path.join(line.strip(),fol_name.strip()) + "_hp2000.ica"
+                nonmatchICs=[]
+            else:
+                nonmatchICs.append(line.strip())
+        write_featdir_html(featdir, htmlpage, nonmatchICs,sub_site_id)
+
+    ## finish the file
+    htmlpage.write('</form>\n')
+    htmlpage.write('<br><h3 style="font-size:150%;">Download TrainFIX_NonMatching.txt:</h3>\n')
+    htmlpage.write('<html lang="ja">\n')
+    htmlpage.write('<head><meta charset="utf-8"><title>Download Sample</title></head>\n')
+    htmlpage.write('<body>\n')
+    htmlpage.write('<script type="text/javascript">\n')
+    htmlpage.write('function handleDownload() {\n')
+
+    htmlpage.write('var handlabels = "";\n')
+
+    labelpath = os.path.join(outdir,nonmatchtxt)
+    sub_site_id = 0
+    if os.path.isfile(labelpath):
+        a=open(labelpath,'r')
+        lines = a.readlines()
+        fol_name=os.path.basename(lines[0])
+        featdir= os.path.join(lines[0].strip(),fol_name.strip()) + '_hp2000.ica'
+        htmlpage.write(' handlabels += "' + str(lines[0].strip()) +'\\n";\n')
+        nonmatchICs=[]
+        for line in lines[1:]:
+            if len(line)>10:
+                signalICs, noiseICs = get_SignalandNoise(featdir, nonmatchICs)
+                write_classify_file(htmlpage,signalICs,"Signal",sub_site_id)
+                write_classify_file(htmlpage,noiseICs,"Noise",sub_site_id)
+                sub_site_id = sub_site_id + 1
+                fol_name=os.path.basename(line)
+                featdir= os.path.join(line.strip(),fol_name.strip()) + "_hp2000.ica"
+                htmlpage.write(' handlabels += "' + str(line.strip()) +'\\n";\n')
+                nonmatchICs=[]
+            else:
+                nonmatchICs.append(line.strip())
+        signalICs, noiseICs = get_SignalandNoise(featdir, nonmatchICs)
+        write_classify_file(htmlpage,signalICs,"Signal",sub_site_id)
+        write_classify_file(htmlpage,noiseICs,"Noise",sub_site_id)
+
+    htmlpage.write('  handlabels = handlabels.substring(0,handlabels.length - 1);\n')
+    htmlpage.write('  $("#output_txt").text(handlabels);\n')
+    htmlpage.write('var blob = new Blob([ handlabels ], { "type" : "text/plain" });\n'
+                    'if (window.navigator.msSaveBlob) {\n'
+                    'window.navigator.msSaveBlob(blob, "TrainFIX_NonMatching.txt");\n'
+                    'window.navigator.msSaveOrOpenBlob(blob, "TrainFIX_NonMatching.txt");}\n'
+                    'else {document.getElementById("download_txt").href = window.URL.createObjectURL(blob);}\n')
+    htmlpage.write('}</script>\n')
+    htmlpage.write('<a style="color:#ff9900;font-size:150%;" id="download_txt" href="#" download="TrainFIX_NonMatching.txt" onclick="handleDownload()">Download TrainFIX_NonMatching.txt</a>\n'
+                    '<br>Results = "<span id="output_txt"></span>"<br>\n')
+    htmlpage.write('</body>\n</html>\n')
+    htmlpage.write('</BODY>\n</HTML>\n')
+    htmlpage.close() # you can omit in most cases as the destructor will call it
