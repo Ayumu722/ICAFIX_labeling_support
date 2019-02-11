@@ -45,7 +45,7 @@ while read Subject; do
 		echo "for i in {1..6};do" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
 		echo "${ScriptFolder}/workbench/bin_linux64/wb_command -show-scene ${DataFolder}/${Subject}_${Condition}.scene \\" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
 		# echo "/mnt/pub/devel/workbench/20171106/bin_rh_linux64/wb_command -show-scene ${DataFolder}/${Subject}_${Condition}.scene \\" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
-		echo "\${i} $OutFolder/ICA\${ica}_\${i}.png 2000 1200 -set-map-yoke I \${ica}" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
+		echo "\${i} $OutFolder/ICA\${ica}_\${i}.png 3000 1600 -set-map-yoke I \${ica}" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
 		echo "done" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
 		echo "convert -delay 200 $OutFolder/ICA\${ica}_*.png ${DataFolder}/${Condition}_hp2000.ica/filtered_func_data.ica/report/ICA\${ica}.gif" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
 		echo "done" >>${job_dir}/${Subject}_${Condition}_ICAFIX.sh
